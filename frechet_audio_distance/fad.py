@@ -10,7 +10,6 @@ import numpy as np
 import resampy
 import soundfile as sf
 import torch
-import laion_clap
 
 from multiprocessing.dummy import Pool as ThreadPool
 from scipy import linalg
@@ -18,8 +17,6 @@ from torch import nn
 from tqdm import tqdm
 
 from .models.pann import Cnn14, Cnn14_8k, Cnn14_16k
-
-from encodec import EncodecModel
 
 
 def load_audio_task(fname, sample_rate, channels, dtype="float32"):
@@ -36,10 +33,16 @@ def load_audio_task(fname, sample_rate, channels, dtype="float32"):
     # Convert to mono
     assert channels in [1, 2], "channels must be 1 or 2"
     if len(wav_data.shape) > channels:
-        wav_data = np.mean(wav_data, axis=1)
+        wav_data = np.mean(wav_data, axis=1, keepdims=True)
 
     if sr != sample_rate:
         wav_data = resampy.resample(wav_data, sr, sample_rate)
+
+    minimum_audio_length = 16000
+    if wav_data.shape[0] < minimum_audio_length:
+        padding_length = minimum_audio_length - wav_data.shape[0]
+
+        wav_data = np.concatenate([wav_data, np.zeros(padding_length, dtype=np.float32)])
 
     return wav_data
 
@@ -198,9 +201,11 @@ class FrechetAudioDistance:
 
             # init model and load checkpoint
             if self.submodel_name in ["630k-audioset", "630k"]:
+                import laion_clap
                 self.model = laion_clap.CLAP_Module(enable_fusion=self.enable_fusion,
                                                     device=self.device)
             elif self.submodel_name in ["music_audioset", "music_speech", "music_speech_audioset"]:
+                import laion_clap
                 self.model = laion_clap.CLAP_Module(enable_fusion=self.enable_fusion,
                                                     amodel='HTSAT-base',
                                                     device=self.device)
@@ -208,6 +213,7 @@ class FrechetAudioDistance:
 
         # encodec
         elif model_name == "encodec":
+            from encodec import EncodecModel
             # choose the right model based on sample_rate
             # weights are loaded from the encodec repo: https://github.com/facebookresearch/encodec/
             if self.sample_rate == 24000:
@@ -228,7 +234,7 @@ class FrechetAudioDistance:
         -- sr   : Sampling rate, if x is a list of audio samples. Default value is 16000.
         """
         embd_lst = []
-        try:
+        if True:
             for audio in tqdm(x, disable=(not self.verbose)):
                 if self.model_name == "vggish":
                     embd = self.model.forward(audio, sr)
@@ -279,8 +285,9 @@ class FrechetAudioDistance:
                     embd = embd.detach().numpy()
                 
                 embd_lst.append(embd)
-        except Exception as e:
-            print("[Frechet Audio Distance] get_embeddings throw an exception: {}".format(str(e)))
+        # except Exception as e:
+        #     print("[Frechet Audio Distance] get_embeddings throw an exception: {}".format(str(e)))
+        #     raise e
 
         return np.concatenate(embd_lst, axis=0)
 
@@ -351,14 +358,18 @@ class FrechetAudioDistance:
         task_results = []
 
         pool = ThreadPool(self.audio_load_worker)
-        pbar = tqdm(total=len(os.listdir(dir)), disable=(not self.verbose))
+
+        dir_files = os.listdir(dir)
+        # dir_files = dir_files[:10]
+
+        pbar = tqdm(total=len(dir_files), disable=(not self.verbose))
 
         def update(*a):
             pbar.update()
 
         if self.verbose:
             print("[Frechet Audio Distance] Loading audio from {}...".format(dir))
-        for fname in os.listdir(dir):
+        for fname in dir_files:
             res = pool.apply_async(
                 load_audio_task,
                 args=(os.path.join(dir, fname), self.sample_rate, self.channels, dtype),
@@ -390,7 +401,7 @@ class FrechetAudioDistance:
         Returns:
         - float: The Frechet Audio Distance (FAD) score between the two directories of audio files.
         """
-        try:
+        if True:
             # Load or compute background embeddings
             if background_embds_path is not None and os.path.exists(background_embds_path):
                 if self.verbose:
@@ -435,6 +446,6 @@ class FrechetAudioDistance:
             )
 
             return fad_score
-        except Exception as e:
-            print(f"[Frechet Audio Distance] An error occurred: {e}")
-            return -1
+        # except Exception as e:
+        #     print(f"[Frechet Audio Distance] An error occurred: {e}")
+        #     return -1
