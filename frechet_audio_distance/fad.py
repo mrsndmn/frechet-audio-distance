@@ -5,6 +5,7 @@ Frechet distance implementation adapted from: https://github.com/mseitzer/pytorc
 
 VGGish adapted from: https://github.com/harritaylor/torchvggish
 """
+from asyncio import all_tasks
 import os
 import numpy as np
 import resampy
@@ -38,7 +39,15 @@ def load_audio_task(fname, sample_rate, channels, dtype="float32"):
         wav_data = np.mean(wav_data, axis=1, keepdims=True)
 
     if sr != sample_rate:
-        wav_data = resampy.resample(wav_data, sr, sample_rate)
+        try:
+            wav_data = resampy.resample(wav_data, sr, sample_rate)
+        except Exception as e:
+            print("wav_data shape", wav_data.shape)
+            print("catched exception", e)
+            wav_data = None
+
+    if wav_data is None:
+        return None
 
     minimum_audio_length = 16000
     if wav_data.shape[0] < minimum_audio_length:
@@ -382,7 +391,13 @@ class FrechetAudioDistance:
         pool.close()
         pool.join()
 
-        return [k.get() for k in task_results]
+        all_tasks_results = []
+        for k in task_results:
+            task_result = k.get()
+            if task_result is not None:
+                all_tasks_results.append(task_result)
+
+        return all_tasks_results
 
     def score(self,
               background_dir,
